@@ -1,0 +1,1 @@
+"""Image retrieval system package."""

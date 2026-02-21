@@ -1,5 +1,12 @@
 import sys
 import os
+
+# Set environment variables BEFORE importing torch to prevent OpenMP crashes on macOS M Series 
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+
 import logging
 import math
 from PIL import Image
@@ -10,8 +17,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.convert_images_to_jpg import convert_images_in_dir_to_jpg
 from retrieval_system import ImageRetrievalSystem
-
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -80,11 +85,13 @@ def run_image_retrieval(task, image_dir=None, query_image=None, index_path="imag
 
 if __name__ == "__main__":
     task = "search" #search/index
-    image_dir = r"C:\Users\vinay mathure\Documents\GitHub\rapido_image_ret\support_database_images"
-    query_folder = r"C:\Users\vinay mathure\Documents\GitHub\rapido_image_ret\query_images"
-    query_image_filename = r"C:\Users\vinay mathure\Documents\GitHub\rapido_image_ret\query_images\ray-ban-rb2132.jpg"
-    index_path = "image_index.faiss"
-    metadata_path = "image_metadata.json"
+    # Get project root directory (parent of src directory)
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    image_dir = os.path.join(project_root, "support_database_images")
+    query_folder = os.path.join(project_root, "query_images")
+    query_image_filename = "ray-ban-rb2132.jpg"  # Just the filename, not full path
+    index_path = os.path.join(os.path.dirname(__file__), "image_index.faiss")
+    metadata_path = os.path.join(os.path.dirname(__file__), "image_metadata.json")
 
     if query_image_filename:
         query_image = os.path.join(query_folder, query_image_filename)
