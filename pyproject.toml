@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "image-retrieval-system"
+version = "0.1.0"
+description = "Image retrieval system using ViT and FAISS"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=1.12.0",
+    "torchvision>=0.13.0",
+    "numpy>=1.21.0",
+    "faiss-cpu>=1.7.2",
+    "Pillow>=8.0.0",
+    "matplotlib>=3.5.0",
+]
+
+[project.optional-dependencies]
+dev = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.hatch.envs.default]
+dependencies = [
+    "torch>=1.12.0",
+    "torchvision>=0.13.0",
+    "numpy>=1.21.0",
+    "faiss-cpu>=1.7.2",
+    "Pillow>=8.0.0",
+    "matplotlib>=3.5.0",
+]
+
+[tool.hatch.envs.default.scripts]
+index = "python src/index_and_retrieve.py"
