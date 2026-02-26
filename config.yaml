@@ -1,25 +1,24 @@
 # Image Retrieval System — single source of truth for all settings
 # Run: uv run image-ret
 
-mode: search   # "index" or "search"
+mode: index   #index or search
 
 database_dir: data/database
 query_image: data/query/credit-card-payment-card-debit-card-png-favpng-64eNDLeUZpxHA3zrxN9evyXHd.jpg
 
-index_dir: data/index       # directory for versioned .npz index files
+index_dir: data/index # location to search for index
 top_k: 3
-threshold: 0.5              # cosine distance — lower = more similar; matches with distance <= threshold pass
+threshold: 0.5 # lower cosine dist. == more similar; matches with distance <= threshold pass
 
-version: 2                  # explicit index version to save/load (omit to auto-increment on index, auto-latest on search)
-
-supported_extensions:       # only these file types are indexed; others are skipped
+version: 2   # which index to load
+supported_extensions:       # only these file types are supported in indexing
   - .png
   - .jpg
   - .jpeg
   - .webp
 
 model: vit_l_16
-# Available models (name → embedding dim → use case):
+# Available models 
 #   vit_b_32  →  768-d  → fastest, good for prototyping or large datasets
 #   vit_b_16  →  768-d  → balanced speed and accuracy
 #   vit_l_32  → 1024-d  → higher quality, still reasonable speed
