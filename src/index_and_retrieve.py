@@ -1,5 +1,6 @@
 import os
 import glob
+import zipfile
 import yaml
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -8,6 +9,27 @@ from .retrieval_system import ImageRetrievalSystem
 from .segmenter import ImageSegmenter
 
 INDEX_NAME = "image_index"
+DATA_ZIP = "data.zip"
+
+
+def _ensure_data(database_dir):
+    """Extract data.zip if database_dir is missing."""
+    if os.path.isdir(database_dir):
+        return
+    if not os.path.isfile(DATA_ZIP):
+        raise SystemExit(
+            f"'{database_dir}' not found and '{DATA_ZIP}' is missing — "
+            "nothing to unzip."
+        )
+    print(f"'{database_dir}' not found, extracting {DATA_ZIP}...")
+    with zipfile.ZipFile(DATA_ZIP, "r") as zf:
+        zf.extractall(".")
+    if not os.path.isdir(database_dir):
+        raise SystemExit(
+            f"Extracted {DATA_ZIP} but '{database_dir}' still missing — "
+            "check the archive structure."
+        )
+    print("Done.")
 
 
 def _index_file(directory, version):
@@ -82,6 +104,8 @@ def _show_results(query_path, matches, crops_dir):
 def main():
     with open("config.yaml") as f:
         cfg = yaml.safe_load(f)
+
+    _ensure_data(cfg["database_dir"])
 
     index_dir = cfg["index_dir"]
     crops_dir = os.path.join(index_dir, "crops")
