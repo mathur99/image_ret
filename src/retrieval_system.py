@@ -1,91 +1,195 @@
 import os
-import json
+import gc
+import time
+from datetime import datetime, timezone
+from collections import Counter
+
 import faiss
 import numpy as np
-import logging
-from feature_extractor import ImageFeatureExtractor
+from PIL import Image
+from tqdm import tqdm
 
-logger = logging.getLogger(__name__)
+from .feature_extractor import ImageFeatureExtractor
+
 
 class ImageRetrievalSystem:
-    """
-    Builds a FAISS Inner-Product index over object-cropped, L2-normalized ViT features.
-    """
-    def __init__(self, index_path=None, metadata_path=None, use_gpu=False, heavy_model=True, device=None):
-        # Initialize feature extractor
-        self.feature_extractor = ImageFeatureExtractor(heavy_model=heavy_model, device=device)
-        self.feature_dim = self.feature_extractor.feature_dim
+    """FAISS cosine-similarity index over ViT embeddings, stored as .npz."""
 
-        # Metadata mapping from index -> image path
-        self.metadata = {}
+    def __init__(self, model="vit_l_16", index_path=None):
+        self.extractor = ImageFeatureExtractor(model_name=model)
+        dim = self.extractor.feature_dim
 
-        # Create an Inner-Product FAISS index (cosine similarity)
-        self.index = faiss.IndexFlatIP(self.feature_dim)
-        if use_gpu:
-            res = faiss.StandardGpuResources()
-            self.index = faiss.index_cpu_to_gpu(res, 0, self.index)
+        self.features = np.empty((0, dim), dtype=np.float32)
+        self.labels = np.array([], dtype=str)
+        self.dates_added = np.array([], dtype=str)
+        self.dates_edited = np.array([], dtype=str)
 
-        # Load existing index if provided
-        if index_path and metadata_path:
-            self.load(index_path, metadata_path)
+        # inner product on L2-normed vectors = cosine similarity
+        self.index = faiss.IndexFlatIP(dim)
 
-    def index_images(self, directory):
-        """
-        Extract features for each .jpg in `directory` and add to FAISS index.
-        """
-        paths = [os.path.join(directory, f)
-                 for f in os.listdir(directory)
-                 if f.lower().endswith('.jpg')]
-        features = []
-        for path in paths:
+        if index_path:
+            self.load(index_path)
+
+    def index_images(self, directory, segmenter, crops_dir, supported_extensions):
+        # find all supported image files
+        filenames = []
+        for f in sorted(os.listdir(directory)):
+            ext = os.path.splitext(f)[1].lower()
+            if ext in supported_extensions:
+                filenames.append(f)
+
+        # label = filename without extension
+        labels = []
+        for f in filenames:
+            name = os.path.splitext(f)[0]
+            labels.append(name)
+
+        print(f"Found {len(filenames)} images")
+
+        # check for duplicate labels
+        counts = Counter(labels)
+        duplicates = []
+        for name, count in counts.items():
+            if count > 1:
+                duplicates.append(name)
+        if duplicates:
+            raise ValueError(f"Duplicate filenames: {duplicates}")
+
+        # detect objects in each image
+        items = self._detect_objects(directory, filenames, labels, segmenter, crops_dir)
+        if not items:
+            raise ValueError("Nothing to index.")
+
+        # extract embeddings for each crop
+        timestamp = datetime.now(timezone.utc).isoformat()
+        new_features = []
+        new_labels = []
+
+        t0 = time.perf_counter()
+        for label, image in tqdm(items, desc="Embedding"):
             try:
-                feat = self.feature_extractor.extract_features(path)
-                features.append(feat)
-                idx = len(self.metadata)
-                self.metadata[str(idx)] = {'path': path}
-            except Exception as e:
-                logger.error(f"Error processing {path}: {e}")
+                feature = self.extractor.extract(image)
+                new_features.append(feature)
+                new_labels.append(label)
+            except Exception as error:
+                print(f"  Failed on {label}: {error}")
 
-        if not features:
-            raise ValueError("No features extracted to index.")
+        if not new_features:
+            raise ValueError("No features extracted.")
+        print(f"Embedded {len(new_features)} entries ({time.perf_counter() - t0:.1f}s)")
 
-        # Stack and normalize (precaution) then add to FAISS
-        features_np = np.stack(features)
-        faiss.normalize_L2(features_np)
-        self.index.add(features_np)
+        # normalize and add to index
+        feature_matrix = np.stack(new_features).astype(np.float32)
+        faiss.normalize_L2(feature_matrix)
 
-    def search(self, query_image, k=5):
-        """
-        Returns top-k results sorted by cosine similarity descending.
-        Each entry is (path, similarity, distance).
-        """
-        # 1) Extract & normalize query feature
-        feat = self.feature_extractor.extract_features(query_image).reshape(1, -1)
-        faiss.normalize_L2(feat)
+        if self.features.size:
+            self.features = np.vstack([self.features, feature_matrix])
+        else:
+            self.features = feature_matrix
 
-        # 2) Search FAISS (Inner-Product = cosine similarity for unit vectors)
-        sims, idxs = self.index.search(feat, k)
+        self.labels = np.concatenate([self.labels, new_labels])
+        self.dates_added = np.concatenate([self.dates_added, [timestamp] * len(new_labels)])
+        self.dates_edited = np.concatenate([self.dates_edited, [timestamp] * len(new_labels)])
+        self.index.add(feature_matrix)
 
-        # 3) Build list of (path, sim)
-        results = [
-            (self.metadata[str(i)]['path'], float(sim))
-            for i, sim in zip(idxs[0], sims[0])
-        ]
+    def _detect_objects(self, directory, filenames, labels, segmenter, crops_dir):
+        """Run object detection on each image, return (label, PIL image) pairs."""
+        os.makedirs(crops_dir, exist_ok=True)
+        items = []
 
-        # 4) Sort by similarity descending
-        results.sort(key=lambda x: x[1], reverse=True)
+        t0 = time.perf_counter()
+        for filename, label in tqdm(zip(filenames, labels), total=len(filenames), desc="Detecting"):
+            path = os.path.join(directory, filename)
+            try:
+                crops = segmenter.segment(path)
 
-        # 5) Compute distance = 1 - sim, and return full tuples
-        return [(path, sim, 1.0 - sim) for path, sim in results]
+                for i, crop in enumerate(crops):
+                    if len(crops) > 1:
+                        crop_label = f"{label}_obj{i}"
+                    else:
+                        crop_label = label
 
-    def save(self, index_path, metadata_path):
-        """Save FAISS index and metadata JSON to disk."""
-        faiss.write_index(self.index, index_path)
-        with open(metadata_path, 'w') as f:
-            json.dump(self.metadata, f)
+                    crop.save(os.path.join(crops_dir, f"{crop_label}.jpg"), "JPEG")
+                    items.append((crop_label, crop))
 
-    def load(self, index_path, metadata_path):
-        """Load FAISS index and metadata JSON from disk."""
-        self.index = faiss.read_index(index_path)
-        with open(metadata_path, 'r') as f:
-            self.metadata = json.load(f)
+            except Exception as error:
+                print(f"  Detection failed for {filename}: {error}")
+
+        print(f"Detected {len(items)} objects ({time.perf_counter() - t0:.1f}s)")
+
+        # free detection model before ViT runs
+        del segmenter
+        gc.collect()
+
+        return items
+
+    def search(self, query_path, k=5, segmenter=None):
+        """Returns [(label, cosine_distance, date_added), ...] sorted by distance ascending."""
+        if segmenter:
+            images = segmenter.segment(query_path)
+            del segmenter
+            gc.collect()
+        else:
+            images = [Image.open(query_path).convert("RGB")]
+
+        # search each crop, keep best similarity per label
+        best_scores = {}
+
+        for image in images:
+            feature = self.extractor.extract(image).reshape(1, -1)
+            faiss.normalize_L2(feature)
+
+            similarities, indices = self.index.search(feature, k)
+
+            for idx, sim in zip(indices[0], similarities[0]):
+                if idx >= len(self.labels):
+                    continue
+
+                label = self.labels[idx]
+                score = float(sim)
+
+                if label not in best_scores or score > best_scores[label][0]:
+                    date_added = str(self.dates_added[idx])
+                    best_scores[label] = (score, date_added)
+
+        # convert to (label, cosine_distance, date_added), sorted by distance ascending
+        results = []
+        for label, (similarity, date_added) in best_scores.items():
+            distance = 1.0 - similarity
+            results.append((label, distance, date_added))
+
+        results.sort(key=lambda x: x[1])
+        return results[:k]
+
+    def save(self, path, version=1):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        np.savez(
+            path,
+            features=self.features,
+            label_name=self.labels,
+            date_added=self.dates_added,
+            date_edited=self.dates_edited,
+            faiss_version=np.array(faiss.__version__),
+            version=np.array(version),
+        )
+        print(f"Saved {len(self.labels)} entries (v{version}) -> {path}")
+
+    def load(self, path):
+        data = np.load(path, allow_pickle=False)
+
+        self.features = data['features'].astype(np.float32)
+        self.labels = data['label_name']
+        self.dates_added = data['date_added']
+        self.dates_edited = data['date_edited']
+
+        # rebuild FAISS from stored features
+        dim = self.features.shape[1]
+        self.index = faiss.IndexFlatIP(dim)
+        self.index.add(self.features)
+
+        version = int(data['version']) if 'version' in data else "?"
+        print(f"Loaded {self.index.ntotal} entries (v{version}) from {path}")
+
+        stored_faiss = str(data['faiss_version'])
+        if stored_faiss != faiss.__version__:
+            print(f"  Warning: index built with faiss {stored_faiss}, running {faiss.__version__}")

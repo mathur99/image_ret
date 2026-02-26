@@ -1,6 +1,7 @@
 import os
+import time
 
-# Set environment variables BEFORE importing torch to prevent OpenMP crashes on macOS
+# must be set before torch import (macOS OpenMP fix)
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
@@ -8,46 +9,56 @@ os.environ.setdefault('NUMEXPR_NUM_THREADS', '1')
 
 import torch
 import numpy as np
-from torchvision.models import vit_l_16, ViT_L_16_Weights
-from torchvision import transforms
+from torchvision import models
 from PIL import Image
 
-class ImageFeatureExtractor:
-    """
-    Extracts L2-normalized ViT embeddings from the full image.
-    """
-    def __init__(self, heavy_model=True, device=None):
-        # Select device
-        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# model name → (constructor, weights, embedding dim)
+MODELS = {
+    "vit_b_32": (models.vit_b_32, models.ViT_B_32_Weights.IMAGENET1K_V1, 768),
+    "vit_b_16": (models.vit_b_16, models.ViT_B_16_Weights.IMAGENET1K_V1, 768),
+    "vit_l_32": (models.vit_l_32, models.ViT_L_32_Weights.IMAGENET1K_V1, 1024),
+    "vit_l_16": (models.vit_l_16, models.ViT_L_16_Weights.IMAGENET1K_V1, 1024),
+    "vit_h_14": (models.vit_h_14, models.ViT_H_14_Weights.IMAGENET1K_SWAG_E2E_V1, 1280),
+}
 
-        # Load pretrained ViT-L/16 and strip classifier head
-        self.model = vit_l_16(weights=ViT_L_16_Weights.IMAGENET1K_V1).to(self.device)
+
+class ImageFeatureExtractor:
+    """ViT embeddings, L2-normalized."""
+
+    def __init__(self, model_name="vit_l_16"):
+        if model_name not in MODELS:
+            available = list(MODELS.keys())
+            raise ValueError(f"Unknown model '{model_name}'. Choose from: {available}")
+
+        constructor, weights, self.feature_dim = MODELS[model_name]
+
+        t0 = time.perf_counter()
+        print(f"Loading {model_name} ({self.feature_dim}-d)...", end=" ", flush=True)
+        self.model = constructor(weights=weights)
+        # drop classifier head to get raw embeddings
         self.model.heads = torch.nn.Identity()
         self.model.eval()
-        self.feature_dim = 1024
+        print(f"done ({time.perf_counter() - t0:.1f}s)")
 
-        # Preprocessing: resize -> center-crop -> normalize
-        self.preproc = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std =[0.229, 0.224, 0.225]),
-        ])
+        # preprocessing shipped with the weights
+        self.preproc = weights.transforms()
 
-    def extract_features(self, image_path):
-        """
-        Returns a (feature_dim,) numpy vector L2-normalized for cosine similarity.
-        """
-        img = Image.open(image_path).convert("RGB")
+    def extract(self, image):
+        """L2-normalized embedding. Accepts a file path or PIL Image."""
+        if isinstance(image, str):
+            image = Image.open(image).convert("RGB")
+        else:
+            image = image.convert("RGB")
 
-        # Use the full image without cropping
-        tensor = self.preproc(img).unsqueeze(0).to(self.device)
+        tensor = self.preproc(image).unsqueeze(0)
 
         with torch.no_grad():
-            feat = self.model(tensor).flatten(1)  # shape (1, feature_dim)
+            embedding = self.model(tensor).flatten(1)
 
-        # Convert to numpy and L2-normalize
-        feat_np = feat.cpu().numpy()
-        feat_np /= (np.linalg.norm(feat_np, axis=1, keepdims=True) + 1e-6)
-        return feat_np.flatten()
+        embedding = embedding.cpu().numpy()
+
+        # L2-normalize so inner product == cosine similarity
+        norm = np.linalg.norm(embedding, axis=1, keepdims=True) + 1e-6
+        embedding = embedding / norm
+
+        return embedding.flatten()
