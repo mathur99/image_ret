@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: image-retrieval-system
-Version: 0.1.0
-Summary: Image retrieval system using ViT and FAISS
-Requires-Dist: torch>=1.12.0
-Requires-Dist: torchvision>=0.13.0
-Requires-Dist: numpy>=1.21.0
-Requires-Dist: faiss-cpu>=1.7.2
-Requires-Dist: Pillow>=8.0.0

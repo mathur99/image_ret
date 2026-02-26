@@ -1,15 +1,22 @@
 # Virtual environment
+.venv/
 venv/
 
 # Python cache
 __pycache__/
 *.pyc
 
+# Build artifacts
+*.egg-info/
+src/*.egg-info/
+
 # macOS
 .DS_Store
 
-# FAISS index files
-*.faiss
+# Image data — raw images excluded, data.zip tracked instead
+data/database/
+data/query/
+data/index/
 
-# Converted images
-converted_jpgs/venv/
+# Notebook checkpoints
+.ipynb_checkpoints/
