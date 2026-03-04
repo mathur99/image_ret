@@ -23,7 +23,17 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "python-multipart",
+    "slowapi",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0", "httpx>=0.25.0"]
+
+[tool.pytest.ini_options]
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
 
 [tool.setuptools.packages.find]
 include = ["src*"]
