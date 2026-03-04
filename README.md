@@ -11,6 +11,8 @@ Built with **PyTorch** / **torchvision** · Powered by **ViT** + **Faster R-CNN*
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![uv](https://img.shields.io/badge/pkg-uv-blueviolet)](https://docs.astral.sh/uv/)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED)](https://www.docker.com/)
+[![FastAPI](https://img.shields.io/badge/api-FastAPI-009688)](https://fastapi.tiangolo.com/)
 
 </div>
 
@@ -27,6 +29,8 @@ Built with **PyTorch** / **torchvision** · Powered by **ViT** + **Faster R-CNN*
 - **Versioned indexes** — `image_index_v1.npz`, `v2`, `v3`... never overwrite, always reproducible
 - **Configurable ViT backbone** — swap between 5 model sizes (768-d to 1280-d) with one line
 - **Visual results** — matplotlib popup showing query vs matched crops with cosine distance and date
+- **REST API** — FastAPI endpoint for image upload and search over HTTP (JSON response)
+- **Docker-ready** — single `docker compose up` to run the API in a container
 
 ![example](.github/assets/Figure_1.png)
 
@@ -66,10 +70,12 @@ flowchart LR
         S3["Embed Crops\nViT"]
         S4["FAISS Search\ncosine distance"]
         S5["Results Popup\nmatplotlib"]
+        S6["JSON Response\nFastAPI"]
         S1 -- "image" --> S2
         S2 -- "crops" --> S3
         S3 -- "vectors" --> S4
-        S4 -- "≤ threshold" --> S5
+        S4 -- "≤ threshold\nCLI" --> S5
+        S4 -- "≤ threshold\nAPI" --> S6
     end
 
     CONFIG -. "drives" .-> INDEX
@@ -100,7 +106,8 @@ classDiagram
 ## How it works
 
 1. **Index** — source images are segmented into object crops (Faster R-CNN), embedded with a Vision Transformer, L2-normalized, and stored in a versioned FAISS index (`.npz`).
-2. **Search** — a query image goes through the same segment-then-embed pipeline; FAISS finds the closest embeddings by cosine distance and displays passing matches in a matplotlib popup.
+2. **Search (CLI)** — a query image goes through the same segment-then-embed pipeline; FAISS finds the closest embeddings by cosine distance and displays passing matches in a matplotlib popup.
+3. **Search (API)** — same pipeline exposed as a `POST /search` endpoint via FastAPI. Upload an image, get JSON results back.
 
 Both pipelines are driven entirely by `config.yaml` — no CLI arguments, no argparse.
 
@@ -150,6 +157,63 @@ Set `mode: search`. The query image is segmented, embedded, and compared against
 - If `version` is omitted, the latest index in `index_dir` is loaded.
 - Only matches with cosine distance **<= threshold** are shown.
 - Results pop up in a matplotlib window showing the query alongside matched crops, with cosine distance and date added.
+
+### API
+
+The FastAPI server exposes the search pipeline over HTTP. It loads the index and models once at startup (using `config.yaml`), then accepts image uploads.
+
+```bash
+# run locally
+uv run uvicorn src.api:app --host 0.0.0.0 --port 8000
+```
+
+```bash
+# search
+curl -X POST http://localhost:8000/search -F "image=@data/query/photo.jpg"
+```
+
+Response:
+
+```json
+{
+  "matches": [
+    { "label": "wallet_1_obj0", "distance": 0.312, "date_added": "2026-02-26" }
+  ]
+}
+```
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | GET | Returns `{"status": "ok"}` |
+| `/search` | POST | Accepts multipart image upload, returns matching items as JSON |
+
+### Docker
+
+Build and run the API in a container. Data and config are mounted as volumes so the index doesn't need to be baked into the image.
+
+```bash
+docker compose up --build
+```
+
+This builds the image (Python 3.12 + uv), installs all dependencies, and starts the FastAPI server on port 8000. First run downloads model weights (~1.2 GB ViT + 74 MB Faster R-CNN).
+
+To run in the background:
+
+```bash
+docker compose up -d          # start
+docker compose logs -f        # follow logs
+docker compose down           # stop
+```
+
+<details>
+<summary>Manual Docker build (without compose)</summary>
+
+```bash
+docker build -t image-ret .
+docker run -p 8000:8000 -v ./data:/app/data -v ./config.yaml:/app/config.yaml image-ret
+```
+
+</details>
 
 ---
 
@@ -214,8 +278,12 @@ image_ret/
 ├── setup.sh                         # one-command setup (install + unzip)
 ├── data.zip                         # sample images archive (database + query)
 ├── architecture.excalidraw.json     # full interactive architecture diagram
+├── Dockerfile                       # Python 3.12 + uv container image
+├── docker-compose.yaml              # one-command container setup
+├── .dockerignore                    # keeps build context small
 ├── src/
-│   ├── index_and_retrieve.py        # entry point — reads config, runs index or search
+│   ├── index_and_retrieve.py        # CLI entry point — reads config, runs index or search
+│   ├── api.py                       # FastAPI server — POST /search, GET /health
 │   ├── feature_extractor.py         # ViT embeddings (configurable model)
 │   ├── retrieval_system.py          # FAISS index, .npz save/load, search
 │   └── segmenter.py                 # Faster R-CNN MobileNetV3-FPN object detection
@@ -243,6 +311,8 @@ image_ret/
 | Package manager | [uv](https://docs.astral.sh/uv/) |
 | Deep learning | PyTorch, torchvision |
 | Search | FAISS (faiss-cpu) |
+| API | FastAPI, uvicorn |
+| Container | Docker, Docker Compose |
 | Visualization | matplotlib |
 | Config | YAML (`pyyaml`) |
 | Inspection | Jupyter notebook, pandas |

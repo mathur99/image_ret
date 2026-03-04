@@ -17,6 +17,7 @@ src/*.egg-info/
 data/database/
 data/query/
 data/index/
+data/tmp/
 
 # Notebook checkpoints
 .ipynb_checkpoints/

@@ -146,7 +146,9 @@ def main():
         top_k = cfg.get("top_k", 5)
         threshold = cfg.get("threshold", 0.5)
 
-        results = system.search(cfg["query_image"], k=top_k, segmenter=segmenter)
+        query_crops_dir = os.path.join("data", "tmp", "query_crops")
+        results = system.search(cfg["query_image"], k=top_k, segmenter=segmenter,
+                                query_crops_dir=query_crops_dir)
 
         # keep only results where cosine distance < threshold
         matches = []
