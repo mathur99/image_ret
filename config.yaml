@@ -1,16 +1,17 @@
 # Image Retrieval System — single source of truth for all settings
 # Run: uv run image-ret
 
-mode: index   #index or search
+mode: search   #index or search
 
 database_dir: data/database
-query_image: data/query/credit-card-payment-card-debit-card-png-favpng-64eNDLeUZpxHA3zrxN9evyXHd.jpg
+query_image: /Users/muditmathur/Desktop/Code/projects/experiments/image_ret/data/query/imagec2.png
+# query_image: data/query/da1e89447a2f414fb45f06caace5323b.jpg
 
 index_dir: data/index # location to search for index
 top_k: 3
 threshold: 0.5 # lower cosine dist. == more similar; matches with distance <= threshold pass
 
-version: 1   # which index to load
+version: 3   # which index to load
 supported_extensions:       # only these file types are supported in indexing
   - .png
   - .jpg

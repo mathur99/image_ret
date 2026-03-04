@@ -123,7 +123,7 @@ class ImageRetrievalSystem:
 
         return items
 
-    def search(self, query_path, k=5, segmenter=None):
+    def search(self, query_path, k=5, segmenter=None, query_crops_dir=None):
         """Returns [(label, cosine_distance, date_added), ...] sorted by distance ascending."""
         if segmenter:
             images = segmenter.segment(query_path)
@@ -131,6 +131,14 @@ class ImageRetrievalSystem:
             gc.collect()
         else:
             images = [Image.open(query_path).convert("RGB")]
+
+        if query_crops_dir:
+            os.makedirs(query_crops_dir, exist_ok=True)
+            stem = os.path.splitext(os.path.basename(query_path))[0]
+            for i, img in enumerate(images):
+                tag = f"{stem}_obj{i}" if len(images) > 1 else stem
+                img.save(os.path.join(query_crops_dir, f"{tag}.jpg"), "JPEG")
+            print(f"Saved {len(images)} query crop(s) to {query_crops_dir}")
 
         # search each crop, keep best similarity per label
         best_scores = {}

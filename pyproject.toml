@@ -20,6 +20,9 @@ dependencies = [
     "scikit-learn>=1.3.0",
     "scipy>=1.10.0",
     "ipykernel>=6.0.0",
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
 ]
 
 [tool.setuptools.packages.find]
