@@ -30,7 +30,9 @@ Built with **PyTorch** / **torchvision** · Powered by **ViT** + **Faster R-CNN*
 - **Configurable ViT backbone** — swap between 5 model sizes (768-d to 1280-d) with one line
 - **Visual results** — matplotlib popup showing query vs matched crops with cosine distance and date
 - **REST API** — FastAPI endpoint for image upload and search over HTTP (JSON response)
+- **API safeguards** — 20 MB max upload size, rate limit (5 requests/min per client), request logging
 - **Docker-ready** — single `docker compose up` to run the API in a container
+- **Tests** — lightweight pytest suite for health and search (no heavy model load in CI)
 
 ![example](.github/assets/Figure_1.png)
 
@@ -41,46 +43,35 @@ Built with **PyTorch** / **torchvision** · Powered by **ViT** + **Faster R-CNN*
 > Full interactive version: open `architecture.excalidraw.json` in [Excalidraw](https://excalidraw.com/)
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph CONFIG["config.yaml"]
-        direction TB
-        C1["mode · model · threshold"]
-        C2["top_k · index_dir"]
-        C3["database_dir · query_image"]
-        C4["extensions · version"]
+        C1["mode · model · threshold · top_k · index_dir"]
+        C2["database_dir · query_image · extensions · version"]
     end
 
     subgraph INDEX["INDEX Pipeline"]
         direction LR
-        I1["Image Database\n.jpg .png .webp"]
-        I2["Object Detection\nFaster R-CNN\nMobileNetV3-FPN"]
-        I3["Feature Extraction\nVision Transformer"]
-        I4["Build Index\nFAISS IndexFlatIP"]
-        I5["Save\nimage_index_vN.npz"]
-        I1 -- "images" --> I2
-        I2 -- "crops" --> I3
-        I3 -- "1024-d vectors" --> I4
-        I4 -- "L2-normalized" --> I5
+        I1["DB images"]
+        I2["Faster R-CNN"]
+        I3["ViT embed"]
+        I4["FAISS index"]
+        I5[".npz save"]
+        I1 --> I2 --> I3 --> I4 --> I5
     end
 
     subgraph SEARCH["SEARCH Pipeline"]
         direction LR
-        S1["Query Image"]
-        S2["Segment Query\nFaster R-CNN"]
-        S3["Embed Crops\nViT"]
-        S4["FAISS Search\ncosine distance"]
-        S5["Results Popup\nmatplotlib"]
-        S6["JSON Response\nFastAPI"]
-        S1 -- "image" --> S2
-        S2 -- "crops" --> S3
-        S3 -- "vectors" --> S4
-        S4 -- "≤ threshold\nCLI" --> S5
-        S4 -- "≤ threshold\nAPI" --> S6
+        S1["Query"]
+        S2["Segment"]
+        S3["Embed"]
+        S4["FAISS search"]
+        S5["CLI popup / API JSON"]
+        S1 --> S2 --> S3 --> S4 --> S5
     end
 
-    CONFIG -. "drives" .-> INDEX
-    CONFIG -. "drives" .-> SEARCH
-    I5 -. "load index" .-> S4
+    CONFIG -.-> INDEX
+    CONFIG -.-> SEARCH
+    I5 -.-> S4
 
     style CONFIG fill:#fff9db,stroke:#fab005,color:#000
     style INDEX fill:#ebfbee,stroke:#40c057,color:#000
@@ -162,6 +153,12 @@ Set `mode: search`. The query image is segmented, embedded, and compared against
 
 The FastAPI server exposes the search pipeline over HTTP. It loads the index and models once at startup (using `config.yaml`), then accepts image uploads.
 
+**Limits and behaviour**
+
+- **Upload size** — Images must be at most **20 MB**. Larger uploads receive `413 Payload Too Large`.
+- **Rate limit** — **5 requests per minute** per client (by IP). Exceeding returns `429 Too Many Requests`.
+- **Logging** — Startup logs config path, index path, and model; each request is logged with method, path, status code, and duration. Rejected requests (empty file, invalid image, over size) are logged at warning level.
+
 ```bash
 # run locally
 uv run uvicorn src.api:app --host 0.0.0.0 --port 8000
@@ -185,7 +182,15 @@ Response:
 | Endpoint | Method | Description |
 |---|---|---|
 | `/health` | GET | Returns `{"status": "ok"}` |
-| `/search` | POST | Accepts multipart image upload, returns matching items as JSON |
+| `/search` | POST | Multipart image upload (field `image`), returns matching items as JSON. Max 20 MB, 5 req/min per client. |
+
+| Status | Meaning |
+|---|---|
+| 200 | Success, `matches` in body |
+| 400 | Empty file or invalid/unsupported image |
+| 413 | Image larger than 20 MB |
+| 429 | Rate limit exceeded (5/min) |
+| 503 | Server still starting or index not loaded |
 
 ### Docker
 
@@ -214,6 +219,17 @@ docker run -p 8000:8000 -v ./data:/app/data -v ./config.yaml:/app/config.yaml im
 ```
 
 </details>
+
+### Tests
+
+Lightweight API tests run without a real index (startup is mocked). Install dev deps and run:
+
+```bash
+uv sync --extra dev
+uv run pytest tests/test_api.py -v
+```
+
+Tests cover: health check, search with valid image (mocked), empty/invalid image → 400, image over 20 MB → 413. Logs are shown during test runs (pytest `log_cli` in `pyproject.toml`).
 
 ---
 
@@ -283,10 +299,12 @@ image_ret/
 ├── .dockerignore                    # keeps build context small
 ├── src/
 │   ├── index_and_retrieve.py        # CLI entry point — reads config, runs index or search
-│   ├── api.py                       # FastAPI server — POST /search, GET /health
+│   ├── api.py                       # FastAPI server — POST /search, GET /health, logging, rate limit, 20 MB cap
 │   ├── feature_extractor.py         # ViT embeddings (configurable model)
 │   ├── retrieval_system.py          # FAISS index, .npz save/load, search
 │   └── segmenter.py                 # Faster R-CNN MobileNetV3-FPN object detection
+├── tests/
+│   └── test_api.py                  # Lightweight API tests (health, search validation, 413)
 ├── notebooks/
 │   └── inspect_index.ipynb          # browse .npz index contents in pandas
 └── data/                            # created by setup.sh / unzip
